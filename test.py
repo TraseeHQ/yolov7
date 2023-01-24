@@ -36,6 +36,7 @@ def test(data,
          save_conf=False,  # save auto-label confidences
          plots=True,
          wandb_logger=None,
+         mlflow_logger=None,
          compute_loss=None,
          half_precision=True,
          trace=False,
@@ -58,7 +59,7 @@ def test(data,
         model = attempt_load(weights, map_location=device)  # load FP32 model
         gs = max(int(model.stride.max()), 32)  # grid size (max stride)
         imgsz = check_img_size(imgsz, s=gs)  # check img_size
-        
+
         if trace:
             model = TracedModel(model, device, imgsz)
 
@@ -82,6 +83,8 @@ def test(data,
     log_imgs = 0
     if wandb_logger and wandb_logger.wandb:
         log_imgs = min(wandb_logger.log_imgs, 100)
+    if mlflow_logger and mlflow_logger.mlflow:
+        log_imgs = 16
     # Dataloader
     if not training:
         if device.type != 'cpu':
@@ -92,7 +95,7 @@ def test(data,
 
     if v5_metric:
         print("Testing with YOLOv5 AP metric...")
-    
+
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
     names = {k: v for k, v in enumerate(model.names if hasattr(model, 'names') else model.module.names)}
@@ -245,9 +248,12 @@ def test(data,
     # Plots
     if plots:
         confusion_matrix.plot(save_dir=save_dir, names=list(names.values()))
+        files = sorted(save_dir.glob('test*.jpg'))
         if wandb_logger and wandb_logger.wandb:
-            val_batches = [wandb_logger.wandb.Image(str(f), caption=f.name) for f in sorted(save_dir.glob('test*.jpg'))]
+            val_batches = [wandb_logger.wandb.Image(str(f), caption=f.name) for f in files]
             wandb_logger.log({"Validation": val_batches})
+        if mlflow_logger and mlflow_logger.mlflow:
+            [mlflow_logger.log_artifacts(f, "validation") for f in files if f.exists()]
     if wandb_images:
         wandb_logger.log({"Bounding Box Debugger/Images": wandb_images})
 

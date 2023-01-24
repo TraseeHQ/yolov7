@@ -34,6 +34,7 @@ from utils.loss import ComputeLoss, ComputeLossOTA
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
+from utils.mlflow_logging.mlflow_utils import MlflowLogger
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +66,18 @@ def train(hyp, opt, device, tb_writer=None):
     is_coco = opt.data.endswith('coco.yaml')
 
     # Logging- Doing this before checking the dataset. Might update data_dict
-    loggers = {'wandb': None}  # loggers dict
+    loggers = {'wandb': None, 'mlflow': None}  # loggers dict
     if rank in [-1, 0]:
         opt.hyp = hyp  # add hyperparameters
         run_id = torch.load(weights, map_location=device).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
         wandb_logger = WandbLogger(opt, Path(opt.save_dir).stem, run_id, data_dict)
-        loggers['wandb'] = wandb_logger.wandb
+        loggers['wandb'] = wandb_logger.wandb is not None
         data_dict = wandb_logger.data_dict
-        if wandb_logger.wandb:
+        if loggers['wandb']:
             weights, epochs, hyp = opt.weights, opt.epochs, opt.hyp  # WandbLogger might update weights, epochs if resuming
+
+        mlflow_logger = MlflowLogger(opt)
+        loggers['mlflow'] = mlflow_logger.mlflow is not None
 
     nc = 1 if opt.single_cls else int(data_dict['nc'])  # number of classes
     names = ['item'] if opt.single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
@@ -121,60 +125,60 @@ def train(hyp, opt, device, tb_writer=None):
         elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
             pg1.append(v.weight)  # apply decay
         if hasattr(v, 'im'):
-            if hasattr(v.im, 'implicit'):           
+            if hasattr(v.im, 'implicit'):
                 pg0.append(v.im.implicit)
             else:
                 for iv in v.im:
                     pg0.append(iv.implicit)
         if hasattr(v, 'imc'):
-            if hasattr(v.imc, 'implicit'):           
+            if hasattr(v.imc, 'implicit'):
                 pg0.append(v.imc.implicit)
             else:
                 for iv in v.imc:
                     pg0.append(iv.implicit)
         if hasattr(v, 'imb'):
-            if hasattr(v.imb, 'implicit'):           
+            if hasattr(v.imb, 'implicit'):
                 pg0.append(v.imb.implicit)
             else:
                 for iv in v.imb:
                     pg0.append(iv.implicit)
         if hasattr(v, 'imo'):
-            if hasattr(v.imo, 'implicit'):           
+            if hasattr(v.imo, 'implicit'):
                 pg0.append(v.imo.implicit)
             else:
                 for iv in v.imo:
                     pg0.append(iv.implicit)
         if hasattr(v, 'ia'):
-            if hasattr(v.ia, 'implicit'):           
+            if hasattr(v.ia, 'implicit'):
                 pg0.append(v.ia.implicit)
             else:
                 for iv in v.ia:
                     pg0.append(iv.implicit)
         if hasattr(v, 'attn'):
-            if hasattr(v.attn, 'logit_scale'):   
+            if hasattr(v.attn, 'logit_scale'):
                 pg0.append(v.attn.logit_scale)
-            if hasattr(v.attn, 'q_bias'):   
+            if hasattr(v.attn, 'q_bias'):
                 pg0.append(v.attn.q_bias)
-            if hasattr(v.attn, 'v_bias'):  
+            if hasattr(v.attn, 'v_bias'):
                 pg0.append(v.attn.v_bias)
-            if hasattr(v.attn, 'relative_position_bias_table'):  
+            if hasattr(v.attn, 'relative_position_bias_table'):
                 pg0.append(v.attn.relative_position_bias_table)
         if hasattr(v, 'rbr_dense'):
-            if hasattr(v.rbr_dense, 'weight_rbr_origin'):  
+            if hasattr(v.rbr_dense, 'weight_rbr_origin'):
                 pg0.append(v.rbr_dense.weight_rbr_origin)
-            if hasattr(v.rbr_dense, 'weight_rbr_avg_conv'): 
+            if hasattr(v.rbr_dense, 'weight_rbr_avg_conv'):
                 pg0.append(v.rbr_dense.weight_rbr_avg_conv)
-            if hasattr(v.rbr_dense, 'weight_rbr_pfir_conv'):  
+            if hasattr(v.rbr_dense, 'weight_rbr_pfir_conv'):
                 pg0.append(v.rbr_dense.weight_rbr_pfir_conv)
-            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_idconv1'): 
+            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_idconv1'):
                 pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_idconv1)
-            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_conv2'):   
+            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_conv2'):
                 pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_conv2)
-            if hasattr(v.rbr_dense, 'weight_rbr_gconv_dw'):   
+            if hasattr(v.rbr_dense, 'weight_rbr_gconv_dw'):
                 pg0.append(v.rbr_dense.weight_rbr_gconv_dw)
-            if hasattr(v.rbr_dense, 'weight_rbr_gconv_pw'):   
+            if hasattr(v.rbr_dense, 'weight_rbr_gconv_pw'):
                 pg0.append(v.rbr_dense.weight_rbr_gconv_pw)
-            if hasattr(v.rbr_dense, 'vector'):   
+            if hasattr(v.rbr_dense, 'vector'):
                 pg0.append(v.rbr_dense.vector)
 
     if opt.adam:
@@ -394,9 +398,13 @@ def train(hyp, opt, device, tb_writer=None):
                     # if tb_writer:
                     #     tb_writer.add_image(f, result, dataformats='HWC', global_step=epoch)
                     #     tb_writer.add_graph(torch.jit.trace(model, imgs, strict=False), [])  # add model graph
-                elif plots and ni == 10 and wandb_logger.wandb:
-                    wandb_logger.log({"Mosaics": [wandb_logger.wandb.Image(str(x), caption=x.name) for x in
-                                                  save_dir.glob('train*.jpg') if x.exists()]})
+                elif plots and ni == 10:
+                    files = sorted(save_dir.glob('train*.jpg'))
+                    if loggers['wandb']:
+                        wandb_logger.log({"Mosaics": [wandb_logger.wandb.Image(str(x), caption=x.name) for x in
+                                                  files if x.exists()]})
+                    if loggers['mlflow']:
+                        [mlflow_logger.log_artifacts(f, "train") for f in files if f.exists()]
 
             # end batch ------------------------------------------------------------------------------------------------
         # end epoch ----------------------------------------------------------------------------------------------------
@@ -421,7 +429,7 @@ def train(hyp, opt, device, tb_writer=None):
                                                  save_dir=save_dir,
                                                  verbose=nc < 50 and final_epoch,
                                                  plots=plots and final_epoch,
-                                                 wandb_logger=wandb_logger,
+                                                 wandb_logger=wandb_logger, # TODO: pass mlflow logger
                                                  compute_loss=compute_loss,
                                                  is_coco=is_coco,
                                                  v5_metric=opt.v5_metric)
@@ -440,8 +448,10 @@ def train(hyp, opt, device, tb_writer=None):
             for x, tag in zip(list(mloss[:-1]) + list(results) + lr, tags):
                 if tb_writer:
                     tb_writer.add_scalar(tag, x, epoch)  # tensorboard
-                if wandb_logger.wandb:
+                if loggers['wandb']:
                     wandb_logger.log({tag: x})  # W&B
+                if loggers['mlflow']:
+                    mlflow_logger.log_metrics({tag: x}, epoch=epoch)  # Mlflow
 
             # Update best mAP
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
@@ -458,7 +468,8 @@ def train(hyp, opt, device, tb_writer=None):
                         'ema': deepcopy(ema.ema).half(),
                         'updates': ema.updates,
                         'optimizer': optimizer.state_dict(),
-                        'wandb_id': wandb_logger.wandb_run.id if wandb_logger.wandb else None}
+                        'wandb_id': wandb_logger.wandb_run.id if loggers['wandb'] else None,
+                        'mlflow_id': mlflow_logger.run_id if loggers['mlflow'] else None}
 
                 # Save last, best and delete
                 torch.save(ckpt, last)
@@ -472,10 +483,14 @@ def train(hyp, opt, device, tb_writer=None):
                     torch.save(ckpt, wdir / 'epoch_{:03d}.pt'.format(epoch))
                 elif epoch >= (epochs-5):
                     torch.save(ckpt, wdir / 'epoch_{:03d}.pt'.format(epoch))
-                if wandb_logger.wandb:
+                if loggers['wandb']:
                     if ((epoch + 1) % opt.save_period == 0 and not final_epoch) and opt.save_period != -1:
                         wandb_logger.log_model(
                             last.parent, opt, epoch, fi, best_model=best_fitness == fi)
+                if loggers['mlflow']:
+                    if ((epoch + 1) % opt.save_period == 0 and not final_epoch) and opt.save_period != -1:
+                        mlflow_logger.log_model(model_path=last, model_name=f"{mlflow_logger.model_name}/last/{epoch}")
+
                 del ckpt
 
         # end epoch ----------------------------------------------------------------------------------------------------
@@ -484,10 +499,13 @@ def train(hyp, opt, device, tb_writer=None):
         # Plots
         if plots:
             plot_results(save_dir=save_dir)  # save as results.png
-            if wandb_logger.wandb:
-                files = ['results.png', 'confusion_matrix.png', *[f'{x}_curve.png' for x in ('F1', 'PR', 'P', 'R')]]
+            files = ['results.png', 'confusion_matrix.png', *[f'{x}_curve.png' for x in ('F1', 'PR', 'P', 'R')]]
+            if loggers['wandb']:
                 wandb_logger.log({"Results": [wandb_logger.wandb.Image(str(save_dir / f), caption=f) for f in files
                                               if (save_dir / f).exists()]})
+            if loggers['mlflow']:
+                [mlflow_logger.log_artifacts(str(save_dir / f), f'results/{(save_dir / f).stem}') for f in files
+                                              if (save_dir / f).exists()]
         # Test best.pt
         logger.info('%g epochs completed in %.3f hours.\n' % (epoch - start_epoch + 1, (time.time() - t0) / 3600))
         if opt.data.endswith('coco.yaml') and nc == 80:  # if COCO
@@ -513,11 +531,16 @@ def train(hyp, opt, device, tb_writer=None):
                 strip_optimizer(f)  # strip optimizers
         if opt.bucket:
             os.system(f'gsutil cp {final} gs://{opt.bucket}/weights')  # upload
-        if wandb_logger.wandb and not opt.evolve:  # Log the stripped model
-            wandb_logger.wandb.log_artifact(str(final), type='model',
-                                            name='run_' + wandb_logger.wandb_run.id + '_model',
-                                            aliases=['last', 'best', 'stripped'])
+        if not opt.evolve:  # Log the stripped model
+            if loggers['wandb']:
+                wandb_logger.wandb.log_artifact(str(final), type='model',
+                                                name='run_' + wandb_logger.wandb_run.id + '_model',
+                                                aliases=['last', 'best', 'stripped'])
+            if loggers['mlflow']:
+                mlflow_logger.log_model(model_path=final, model_name=f"{mlflow_logger.model_name}/best/{epoch}")
+
         wandb_logger.finish_run()
+        mlflow_logger.finish_run()
     else:
         dist.destroy_process_group()
     torch.cuda.empty_cache()
@@ -648,12 +671,12 @@ if __name__ == '__main__':
                 'mixup': (1, 0.0, 1.0),   # image mixup (probability)
                 'copy_paste': (1, 0.0, 1.0),  # segment copy-paste (probability)
                 'paste_in': (1, 0.0, 1.0)}    # segment copy-paste (probability)
-        
+
         with open(opt.hyp, errors='ignore') as f:
             hyp = yaml.safe_load(f)  # load hyps dict
             if 'anchors' not in hyp:  # anchors commented in hyp.yaml
                 hyp['anchors'] = 3
-                
+
         assert opt.local_rank == -1, 'DDP mode not implemented for --evolve'
         opt.notest, opt.nosave = True, True  # only test/save final epoch
         # ei = [isinstance(x, (int, float)) for x in hyp.values()]  # evolvable indices

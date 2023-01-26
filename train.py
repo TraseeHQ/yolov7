@@ -489,7 +489,7 @@ def train(hyp, opt, device, tb_writer=None):
                             last.parent, opt, epoch, fi, best_model=best_fitness == fi)
                 if loggers['mlflow']:
                     if ((epoch + 1) % opt.save_period == 0 and not final_epoch) and opt.save_period != -1:
-                        mlflow_logger.log_model(model_path=last, model_name=f"{mlflow_logger.model_name}/last/{epoch}")
+                        mlflow_logger.log_artifacts(artifact=last, relpath=f"{mlflow_logger.model_name}")
 
                 del ckpt
 
@@ -537,7 +537,7 @@ def train(hyp, opt, device, tb_writer=None):
                                                 name='run_' + wandb_logger.wandb_run.id + '_model',
                                                 aliases=['last', 'best', 'stripped'])
             if loggers['mlflow']:
-                mlflow_logger.log_model(model_path=final, model_name=f"{mlflow_logger.model_name}/best/{epoch}")
+                mlflow_logger.log_artifacts(artifact=final, relpath=f"{mlflow_logger.model_name}")
 
         wandb_logger.finish_run()
         mlflow_logger.finish_run()

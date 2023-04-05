@@ -1,0 +1,12 @@
+[core]
+    remote = minio
+    autostage = true
+['remote "s3"']
+    url = s3://gallio-yolov7
+['remote "k8s"']
+    url = s3://yolov7
+    endpointurl = http://minio.minio-operator.svc.cluster.local
+['remote "minio"']
+    url = s3://yolov7
+    endpointurl = http://delta.trasee.pl
+
